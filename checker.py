@@ -270,7 +270,7 @@ def main():
     log(f"   Found {len(sd_files)} media files")
 
     if not sd_files:
-        log("\n⚠️  No media files found on SD card. Nothing to check.")
+        log("\nNo media files found on SD card. Nothing to check.")
         sys.exit(0)
 
     # Count skipped files if requested
