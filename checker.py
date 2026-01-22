@@ -120,13 +120,17 @@ def scan_sd_card(sd_path: str) -> dict[str, tuple[int, float]]:
     return files
 
 
-def scan_nas_folder(fs: FileStation, nas_path: str) -> dict[str, tuple[int, float, str]]:
+def scan_nas_folder(fs: FileStation, nas_path: str, verbose: bool = True) -> dict[str, tuple[int, float, str]]:
     """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}."""
     files = {}
     folders_to_scan = [nas_path]
+    scanned_count = 0
 
     while folders_to_scan:
         folder = folders_to_scan.pop()
+        scanned_count += 1
+        if verbose:
+            print(f"\r  Scanning: {folder[:70]:<70}", end="", flush=True)
         try:
             result = fs.get_file_list(
                 folder_path=folder,
@@ -148,8 +152,10 @@ def scan_nas_folder(fs: FileStation, nas_path: str) -> dict[str, tuple[int, floa
                     if name not in files:
                         files[name] = (size, mtime, folder)
         except Exception as e:
-            print(f"Warning: Could not scan {folder}: {e}")
+            print(f"\nWarning: Could not scan {folder}: {e}")
 
+    if verbose:
+        print(f"\r  Scanned {scanned_count} folders{' ' * 60}")
     return files
 
 
