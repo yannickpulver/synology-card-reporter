@@ -283,9 +283,8 @@ def main():
 
         for date_key in sorted(by_date.keys(), reverse=True):
             files = by_date[date_key]
-            log(f"  {date_key} ({len(files)} files):")
-            for name, size, mtime, path in sorted(files, key=lambda x: x[0]):
-                log(f"    {name:<30} ({format_size(size)})")
+            names = ", ".join(name for name, size, mtime, path in sorted(files, key=lambda x: x[0]))
+            log(f"  {date_key} ({len(files)} files): {names}")
             log("")
     else:
         log("\nAll files are backed up!")
