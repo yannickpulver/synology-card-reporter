@@ -3,11 +3,37 @@
 
 import argparse
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
+def resolve_op_reference(value: str | None) -> str | None:
+    """Resolve 1Password reference (op://...) to actual value."""
+    if not value or not value.startswith('op://'):
+        return value
+    try:
+        result = subprocess.run(
+            ['op', 'read', value],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        print(f"Warning: Failed to resolve 1Password reference: {result.stderr.strip()}")
+        return None
+    except FileNotFoundError:
+        print("Error: 1Password CLI (op) not found. Install it or use plain credentials.")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("Error: 1Password CLI timed out. Are you signed in?")
+        sys.exit(1)
+
+
 from synology_api.filestation import FileStation
 
 # Supported media extensions
@@ -177,12 +203,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Load credentials
+    # Load credentials (supports 1Password references like op://vault/item/field)
     load_dotenv()
-    host = os.getenv('SYNOLOGY_HOST')
+    host = resolve_op_reference(os.getenv('SYNOLOGY_HOST'))
     port = int(os.getenv('SYNOLOGY_PORT', 5000))
-    user = os.getenv('SYNOLOGY_USER')
-    password = os.getenv('SYNOLOGY_PASS')
+    user = resolve_op_reference(os.getenv('SYNOLOGY_USER'))
+    password = resolve_op_reference(os.getenv('SYNOLOGY_PASS'))
     secure = os.getenv('SYNOLOGY_SECURE', 'false').lower() == 'true'
 
     if not all([host, user, password]):
