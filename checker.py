@@ -207,7 +207,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Check if SD card files are backed up to Synology NAS'
     )
-    parser.add_argument('nas_path', help='NAS folder to search (e.g., /photos)')
+    parser.add_argument('nas_paths', nargs='+', help='NAS folder(s) to search (e.g., /photos /backups)')
     parser.add_argument('sd_path', nargs='?', help='SD card path (optional, uses picker)')
     parser.add_argument('--volume', '-v', help='SD card path (alternative to positional)')
     parser.add_argument('--show-skipped', action='store_true', help='List skipped non-media files')
@@ -266,8 +266,11 @@ def main():
         sys.exit(1)
 
     # Scan NAS
-    log(f"Scanning {args.nas_path} (recursive)...")
-    nas_files = scan_nas_folder(fs, args.nas_path)
+    nas_files = {}
+    for nas_path in args.nas_paths:
+        log(f"Scanning {nas_path} (recursive)...")
+        folder_files = scan_nas_folder(fs, nas_path)
+        nas_files.update(folder_files)
     log(f"Found {len(nas_files)} files on NAS")
 
     # Compare
