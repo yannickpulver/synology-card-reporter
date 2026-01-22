@@ -269,6 +269,10 @@ def main():
     sd_files = scan_sd_card(sd_path)
     log(f"   Found {len(sd_files)} media files")
 
+    if not sd_files:
+        log("\n⚠️  No media files found on SD card. Nothing to check.")
+        sys.exit(0)
+
     # Count skipped files if requested
     if args.show_skipped:
         sd_root = Path(sd_path)
