@@ -5,6 +5,7 @@ import argparse
 import os
 import subprocess
 import sys
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -119,8 +120,8 @@ def scan_sd_card(sd_path: str) -> dict[str, tuple[int, float]]:
     return files
 
 
-def scan_nas_folder(fs: FileStation, nas_path: str) -> dict[str, tuple[int, float]]:
-    """Recursively scan NAS folder. Returns {filename: (size, mtime)}."""
+def scan_nas_folder(fs: FileStation, nas_path: str) -> dict[str, tuple[int, float, str]]:
+    """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}."""
     files = {}
     folders_to_scan = [nas_path]
 
@@ -145,7 +146,7 @@ def scan_nas_folder(fs: FileStation, nas_path: str) -> dict[str, tuple[int, floa
                     mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
                     # Store first occurrence (any match is fine)
                     if name not in files:
-                        files[name] = (size, mtime)
+                        files[name] = (size, mtime, folder)
         except Exception as e:
             print(f"Warning: Could not scan {folder}: {e}")
 
@@ -173,16 +174,16 @@ def compare_files(
     nas_files: dict,
     time_tolerance: int = 2
 ) -> tuple[list, list]:
-    """Compare SD files against NAS. Returns (backed_up, missing)."""
+    """Compare SD files against NAS. Returns (backed_up with nas_folder, missing)."""
     backed_up = []
     missing = []
 
     for key, (name, size, mtime, path) in sd_files.items():
         if key in nas_files:
-            nas_size, nas_mtime = nas_files[key]
+            nas_size, nas_mtime, nas_folder = nas_files[key]
             # Match if mtime within tolerance
             if abs(mtime - nas_mtime) <= time_tolerance:
-                backed_up.append((name, size, mtime, path))
+                backed_up.append((name, size, mtime, path, nas_folder))
             else:
                 missing.append((name, size, mtime, path))
         else:
@@ -264,12 +265,28 @@ def main():
 
     log(f"\n✓ {len(backed_up)} files backed up")
 
+    # Show matching folders
+    if backed_up:
+        matching_folders = sorted(set(item[4] for item in backed_up))
+        log(f"\nMatching folders on NAS ({len(matching_folders)}):")
+        for folder in matching_folders:
+            count = sum(1 for item in backed_up if item[4] == folder)
+            log(f"  {folder} ({count} files)")
+
     if missing:
-        log(f"✗ {len(missing)} files missing:\n")
-        # Sort by path
-        missing.sort(key=lambda x: str(x[3]))
+        log(f"\n✗ {len(missing)} files missing:\n")
+        # Group by date
+        by_date: dict[str, list] = defaultdict(list)
         for name, size, mtime, path in missing:
-            log(f"  {name:<30} ({format_size(size)}, {format_time(mtime)})")
+            date_key = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+            by_date[date_key].append((name, size, mtime, path))
+
+        for date_key in sorted(by_date.keys(), reverse=True):
+            files = by_date[date_key]
+            log(f"  {date_key} ({len(files)} files):")
+            for name, size, mtime, path in sorted(files, key=lambda x: x[0]):
+                log(f"    {name:<30} ({format_size(size)})")
+            log("")
     else:
         log("\nAll files are backed up!")
 
