@@ -124,16 +124,17 @@ def scan_nas_folder(
     fs: FileStation,
     nas_path: str,
     verbose: bool = True,
-    target_files: set[str] | None = None
+    target_files: dict[str, float] | None = None,
+    time_tolerance: int = 2
 ) -> dict[str, tuple[int, float, str]]:
     """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}.
 
-    If target_files provided, stops early when all targets found.
+    If target_files provided (dict of filename -> mtime), stops early when all targets found with matching mtime.
     """
     files = {}
     folders_to_scan = [nas_path]
     scanned_count = 0
-    remaining = set(target_files) if target_files else None
+    remaining = set(target_files.keys()) if target_files else None
 
     while folders_to_scan:
         folder = folders_to_scan.pop()
@@ -159,11 +160,16 @@ def scan_nas_folder(
                     name = item['name'].lower()
                     size = item.get('additional', {}).get('size', 0)
                     mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
-                    # Store first occurrence (any match is fine)
+                    # Store if not found yet, or if this one has matching mtime
                     if name not in files:
                         files[name] = (size, mtime, folder)
-                        if remaining and name in remaining:
+                    # Mark as found only if mtime matches (for early exit)
+                    if remaining and name in remaining and target_files:
+                        target_mtime = target_files[name]
+                        if abs(mtime - target_mtime) <= time_tolerance:
                             remaining.discard(name)
+                            # Update with matching file
+                            files[name] = (size, mtime, folder)
 
             # Early exit if all target files found
             if remaining is not None and len(remaining) == 0:
@@ -295,17 +301,22 @@ def main():
         print(f"Error connecting to NAS: {e}")
         sys.exit(1)
 
-    # Scan NAS (with early exit when all SD files found)
-    sd_filenames = set(sd_files.keys())
+    # Scan NAS (with early exit when all SD files found with matching mtime)
+    # Build dict of filename -> mtime for matching
+    sd_file_mtimes = {name: data[2] for name, data in sd_files.items()}
     nas_files = {}
-    all_found = False
     for nas_path in nas_paths:
         log(f"📂 Scanning {nas_path} (recursive)...")
-        remaining = sd_filenames - set(nas_files.keys())
-        folder_files = scan_nas_folder(fs, nas_path, target_files=remaining)
+        # Only look for files not yet matched
+        remaining_mtimes = {k: v for k, v in sd_file_mtimes.items() if k not in nas_files or abs(nas_files[k][1] - v) > 2}
+        folder_files = scan_nas_folder(fs, nas_path, target_files=remaining_mtimes)
         nas_files.update(folder_files)
-        if remaining and len(remaining - set(folder_files.keys())) == 0:
-            all_found = True
+        # Check if all found with matching mtime
+        all_matched = all(
+            name in nas_files and abs(nas_files[name][1] - mtime) <= 2
+            for name, mtime in sd_file_mtimes.items()
+        )
+        if all_matched:
             break
     log(f"   Found {len(nas_files)} matching files on NAS")
 
