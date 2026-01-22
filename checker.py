@@ -141,9 +141,11 @@ def scan_nas_folder(fs: FileStation, nas_path: str, verbose: bool = True) -> dic
             if not result or 'data' not in result:
                 continue
 
+            # Collect subdirs and files separately
+            subdirs = []
             for item in result['data'].get('files', []):
                 if item.get('isdir'):
-                    folders_to_scan.append(item['path'])
+                    subdirs.append(item['path'])
                 else:
                     name = item['name'].lower()
                     size = item.get('additional', {}).get('size', 0)
@@ -151,6 +153,9 @@ def scan_nas_folder(fs: FileStation, nas_path: str, verbose: bool = True) -> dic
                     # Store first occurrence (any match is fine)
                     if name not in files:
                         files[name] = (size, mtime, folder)
+
+            # Add subdirs sorted ascending (pop takes from end, so latest scanned first)
+            folders_to_scan.extend(sorted(subdirs))
         except Exception as e:
             print(f"\nWarning: Could not scan {folder}: {e}")
 
