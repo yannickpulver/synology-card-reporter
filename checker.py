@@ -139,7 +139,7 @@ def scan_nas_folder(
         folder = folders_to_scan.pop()
         scanned_count += 1
         if verbose:
-            print(f"\r  Scanning: {folder[:70]:<70}", end="", flush=True)
+            print(f"\r   🔎 {folder[:70]:<70}", end="", flush=True)
         try:
             result = fs.get_file_list(
                 folder_path=folder,
@@ -168,7 +168,7 @@ def scan_nas_folder(
             # Early exit if all target files found
             if remaining is not None and len(remaining) == 0:
                 if verbose:
-                    print(f"\r  All files found! Scanned {scanned_count} folders{' ' * 30}")
+                    print(f"\r   🎉 All files found! Scanned {scanned_count} folders{' ' * 30}")
                 return files
 
             # Add subdirs sorted ascending (pop takes from end, so latest scanned first)
@@ -177,7 +177,7 @@ def scan_nas_folder(
             print(f"\nWarning: Could not scan {folder}: {e}")
 
     if verbose:
-        print(f"\r  Scanned {scanned_count} folders{' ' * 60}")
+        print(f"\r   ✔ Scanned {scanned_count} folders{' ' * 60}")
     return files
 
 
@@ -256,9 +256,9 @@ def main():
         output_lines.append(msg)
 
     # Scan SD card
-    log(f"Scanning SD card: {sd_path}")
+    log(f"💾 Scanning SD card: {sd_path}")
     sd_files = scan_sd_card(sd_path)
-    log(f"Found {len(sd_files)} media files")
+    log(f"   Found {len(sd_files)} media files")
 
     # Count skipped files if requested
     if args.show_skipped:
@@ -267,7 +267,7 @@ def main():
         skipped = [f for f in all_files if f.is_file() and not is_media_file(f)]
 
     # Connect to NAS
-    log(f"\nConnecting to NAS: {host}")
+    log(f"\n🔌 Connecting to NAS: {host}")
     try:
         fs = FileStation(
             ip_address=host,
@@ -287,31 +287,31 @@ def main():
     nas_files = {}
     all_found = False
     for nas_path in args.nas_paths:
-        log(f"Scanning {nas_path} (recursive)...")
+        log(f"📂 Scanning {nas_path} (recursive)...")
         remaining = sd_filenames - set(nas_files.keys())
         folder_files = scan_nas_folder(fs, nas_path, target_files=remaining)
         nas_files.update(folder_files)
         if remaining and len(remaining - set(folder_files.keys())) == 0:
             all_found = True
             break
-    log(f"Found {len(nas_files)} matching files on NAS")
+    log(f"   Found {len(nas_files)} matching files on NAS")
 
     # Compare
-    log("\nComparing...")
+    log("\n🔍 Comparing...")
     backed_up, missing = compare_files(sd_files, nas_files)
 
-    log(f"\n✓ {len(backed_up)} files backed up")
+    log(f"\n✅ {len(backed_up)} files backed up")
 
     # Show matching folders
     if backed_up:
         matching_folders = sorted(set(item[4] for item in backed_up))
-        log(f"\nMatching folders on NAS ({len(matching_folders)}):")
+        log(f"\n📁 Matching folders on NAS ({len(matching_folders)}):")
         for folder in matching_folders:
             count = sum(1 for item in backed_up if item[4] == folder)
-            log(f"  {folder} ({count} files)")
+            log(f"   {folder} ({count} files)")
 
     if missing:
-        log(f"\n✗ {len(missing)} files missing:\n")
+        log(f"\n❌ {len(missing)} files missing:\n")
         # Group by date
         by_date: dict[str, list] = defaultdict(list)
         for name, size, mtime, path in missing:
@@ -324,11 +324,11 @@ def main():
             log(f"  {date_key} ({len(files)} files): {names}")
             log("")
     else:
-        log("\nAll files are backed up!")
+        log("\n🎉 All files are backed up!")
 
     # Show skipped files
     if args.show_skipped and skipped:
-        log(f"\nSkipped {len(skipped)} non-media files:")
+        log(f"\n⏭️  Skipped {len(skipped)} non-media files:")
         for f in sorted(skipped)[:20]:  # Limit to 20
             log(f"  {f.name}")
         if len(skipped) > 20:
