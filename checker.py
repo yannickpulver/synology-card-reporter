@@ -125,7 +125,7 @@ def scan_nas_folder(
     nas_path: str,
     verbose: bool = True,
     target_files: dict[str, float] | None = None,
-    time_tolerance: int = 2
+    time_tolerance: int = 10
 ) -> dict[str, tuple[int, float, str]]:
     """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}.
 
@@ -206,7 +206,7 @@ def format_time(timestamp: float) -> str:
 def compare_files(
     sd_files: dict,
     nas_files: dict,
-    time_tolerance: int = 2
+    time_tolerance: int = 10
 ) -> tuple[list, list]:
     """Compare SD files against NAS. Returns (backed_up with nas_folder, missing)."""
     backed_up = []
@@ -308,12 +308,12 @@ def main():
     for nas_path in nas_paths:
         log(f"📂 Scanning {nas_path} (recursive)...")
         # Only look for files not yet matched
-        remaining_mtimes = {k: v for k, v in sd_file_mtimes.items() if k not in nas_files or abs(nas_files[k][1] - v) > 2}
+        remaining_mtimes = {k: v for k, v in sd_file_mtimes.items() if k not in nas_files or abs(nas_files[k][1] - v) > 10}
         folder_files = scan_nas_folder(fs, nas_path, target_files=remaining_mtimes)
         nas_files.update(folder_files)
         # Check if all found with matching mtime
         all_matched = all(
-            name in nas_files and abs(nas_files[name][1] - mtime) <= 2
+            name in nas_files and abs(nas_files[name][1] - mtime) <= 10
             for name, mtime in sd_file_mtimes.items()
         )
         if all_matched:
