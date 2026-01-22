@@ -120,11 +120,20 @@ def scan_sd_card(sd_path: str) -> dict[str, tuple[int, float]]:
     return files
 
 
-def scan_nas_folder(fs: FileStation, nas_path: str, verbose: bool = True) -> dict[str, tuple[int, float, str]]:
-    """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}."""
+def scan_nas_folder(
+    fs: FileStation,
+    nas_path: str,
+    verbose: bool = True,
+    target_files: set[str] | None = None
+) -> dict[str, tuple[int, float, str]]:
+    """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}.
+
+    If target_files provided, stops early when all targets found.
+    """
     files = {}
     folders_to_scan = [nas_path]
     scanned_count = 0
+    remaining = set(target_files) if target_files else None
 
     while folders_to_scan:
         folder = folders_to_scan.pop()
@@ -153,6 +162,14 @@ def scan_nas_folder(fs: FileStation, nas_path: str, verbose: bool = True) -> dic
                     # Store first occurrence (any match is fine)
                     if name not in files:
                         files[name] = (size, mtime, folder)
+                        if remaining and name in remaining:
+                            remaining.discard(name)
+
+            # Early exit if all target files found
+            if remaining is not None and len(remaining) == 0:
+                if verbose:
+                    print(f"\r  All files found! Scanned {scanned_count} folders{' ' * 30}")
+                return files
 
             # Add subdirs sorted ascending (pop takes from end, so latest scanned first)
             folders_to_scan.extend(sorted(subdirs))
@@ -265,13 +282,19 @@ def main():
         print(f"Error connecting to NAS: {e}")
         sys.exit(1)
 
-    # Scan NAS
+    # Scan NAS (with early exit when all SD files found)
+    sd_filenames = set(sd_files.keys())
     nas_files = {}
+    all_found = False
     for nas_path in args.nas_paths:
         log(f"Scanning {nas_path} (recursive)...")
-        folder_files = scan_nas_folder(fs, nas_path)
+        remaining = sd_filenames - set(nas_files.keys())
+        folder_files = scan_nas_folder(fs, nas_path, target_files=remaining)
         nas_files.update(folder_files)
-    log(f"Found {len(nas_files)} files on NAS")
+        if remaining and len(remaining - set(folder_files.keys())) == 0:
+            all_found = True
+            break
+    log(f"Found {len(nas_files)} matching files on NAS")
 
     # Compare
     log("\nComparing...")
