@@ -224,7 +224,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Check if SD card files are backed up to Synology NAS'
     )
-    parser.add_argument('nas_paths', nargs='+', help='NAS folder(s) to search (e.g., /photos /backups)')
+    parser.add_argument('nas_paths', nargs='*', help='NAS folder(s) to search (defaults to SYNOLOGY_FOLDERS env)')
     parser.add_argument('sd_path', nargs='?', help='SD card path (optional, uses picker)')
     parser.add_argument('--volume', '-v', help='SD card path (alternative to positional)')
     parser.add_argument('--show-skipped', action='store_true', help='List skipped non-media files')
@@ -241,7 +241,16 @@ def main():
     secure = os.getenv('SYNOLOGY_SECURE', 'false').lower() == 'true'
 
     if not all([host, user, password]):
-        print("Error: Missing NAS credentials. Create .env file from config.example")
+        print("❌ Error: Missing NAS credentials. Create .env file from config.example")
+        sys.exit(1)
+
+    # Get NAS paths from args or env
+    nas_paths = args.nas_paths
+    if not nas_paths:
+        default_folders = os.getenv('SYNOLOGY_FOLDERS', '')
+        nas_paths = default_folders.split() if default_folders else []
+    if not nas_paths:
+        print("❌ Error: No NAS folders specified. Use args or set SYNOLOGY_FOLDERS in .env")
         sys.exit(1)
 
     # Determine SD card path
@@ -286,7 +295,7 @@ def main():
     sd_filenames = set(sd_files.keys())
     nas_files = {}
     all_found = False
-    for nas_path in args.nas_paths:
+    for nas_path in nas_paths:
         log(f"📂 Scanning {nas_path} (recursive)...")
         remaining = sd_filenames - set(nas_files.keys())
         folder_files = scan_nas_folder(fs, nas_path, target_files=remaining)

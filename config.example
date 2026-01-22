@@ -6,3 +6,6 @@ SYNOLOGY_PORT=5000
 SYNOLOGY_USER=admin
 SYNOLOGY_PASS=op://Private/Synology NAS/password
 SYNOLOGY_SECURE=false
+
+# Optional Default NAS folders to search (space-separated, latest first recommended)
+SYNOLOGY_FOLDERS=/myaccount/Photos/2026 /myaccount/Photos/2025 /myaccount/Photos/2024
