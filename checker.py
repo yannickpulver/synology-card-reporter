@@ -142,34 +142,53 @@ def scan_nas_folder(
         if verbose:
             print(f"\r   🔎 {folder[:70]:<70}", end="", flush=True)
         try:
-            result = fs.get_file_list(
-                folder_path=folder,
-                additional=['size', 'time'],
-                limit=5000
-            )
-
-            if not result or 'data' not in result:
-                continue
-
-            # Collect subdirs and files separately
+            # Paginate through all files in folder
+            offset = 0
+            limit = 5000
             subdirs = []
-            for item in result['data'].get('files', []):
-                if item.get('isdir'):
-                    subdirs.append(item['path'])
-                else:
-                    name = item['name'].lower()
-                    size = item.get('additional', {}).get('size', 0)
-                    mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
-                    # Store if not found yet, or if this one has matching mtime
-                    if name not in files:
-                        files[name] = (size, mtime, folder)
-                    # Mark as found only if mtime matches (for early exit)
-                    if remaining and name in remaining and target_files:
-                        target_mtime = target_files[name]
-                        if abs(mtime - target_mtime) <= time_tolerance:
-                            remaining.discard(name)
-                            # Update with matching file
+
+            while True:
+                result = fs.get_file_list(
+                    folder_path=folder,
+                    additional=['size', 'time'],
+                    limit=limit,
+                    offset=offset
+                )
+
+                if not result or 'data' not in result:
+                    break
+
+                items = result['data'].get('files', [])
+                if not items:
+                    break
+
+                for item in items:
+                    if item.get('isdir'):
+                        subdirs.append(item['path'])
+                    else:
+                        name = item['name'].lower()
+                        size = item.get('additional', {}).get('size', 0)
+                        mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
+                        # Check if this file matches target mtime better than existing
+                        if target_files and name in target_files:
+                            target_mtime = target_files[name]
+                            is_match = abs(mtime - target_mtime) <= time_tolerance
+                            # Store if: not found yet, OR this one matches and previous didn't
+                            if name not in files:
+                                files[name] = (size, mtime, folder)
+                                if is_match and remaining:
+                                    remaining.discard(name)
+                            elif is_match and remaining and name in remaining:
+                                # Found a matching version, update
+                                files[name] = (size, mtime, folder)
+                                remaining.discard(name)
+                        elif name not in files:
                             files[name] = (size, mtime, folder)
+
+                # Check if we got fewer items than limit (last page)
+                if len(items) < limit:
+                    break
+                offset += limit
 
             # Early exit if all target files found
             if remaining is not None and len(remaining) == 0:
