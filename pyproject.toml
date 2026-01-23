@@ -1,0 +1,16 @@
+[project]
+name = "sd-checker"
+version = "1.0.0"
+description = "Check if SD card files are backed up to Synology NAS"
+requires-python = ">=3.10"
+dependencies = [
+    "synology-api",
+    "python-dotenv",
+]
+
+[project.scripts]
+sd-checker = "checker:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
