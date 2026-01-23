@@ -48,6 +48,23 @@ MEDIA_EXTS = PHOTO_EXTS | RAW_EXTS | VIDEO_EXTS | SIDECAR_EXTS
 SYSTEM_VOLUMES = {'Macintosh HD', 'Macintosh HD - Data', 'Recovery', 'Preboot', 'VM', 'Update'}
 
 
+def open_finder_with_files(file_paths: list[Path]) -> None:
+    """Open Finder with the specified files selected."""
+    if not file_paths:
+        return
+
+    # Build AppleScript to select multiple files
+    posix_files = ', '.join(f'POSIX file "{p}"' for p in file_paths)
+    script = f'''
+    tell application "Finder"
+        activate
+        reveal {{{posix_files}}}
+        select {{{posix_files}}}
+    end tell
+    '''
+    subprocess.run(['osascript', '-e', script], capture_output=True)
+
+
 def get_available_volumes() -> list[tuple[str, int]]:
     """Get list of mounted volumes with sizes (macOS)."""
     volumes = []
@@ -126,84 +143,92 @@ def scan_nas_folder(
     verbose: bool = True,
     target_files: dict[str, float] | None = None,
     time_tolerance: int = 10
-) -> dict[str, tuple[int, float, str]]:
-    """Recursively scan NAS folder. Returns {filename: (size, mtime, folder_path)}.
+) -> tuple[dict[str, tuple[int, float, str]], bool]:
+    """Recursively scan NAS folder. Returns ({filename: (size, mtime, folder_path)}, was_interrupted).
 
     If target_files provided (dict of filename -> mtime), stops early when all targets found with matching mtime.
+    Press Ctrl+C to stop scan early and proceed with results found so far.
     """
     files = {}
     folders_to_scan = [nas_path]
     scanned_count = 0
     remaining = set(target_files.keys()) if target_files else None
 
-    while folders_to_scan:
-        folder = folders_to_scan.pop()
-        scanned_count += 1
-        if verbose:
-            print(f"\r   🔎 {folder[:70]:<70}", end="", flush=True)
-        try:
-            # Paginate through all files in folder
-            offset = 0
-            limit = 5000
-            subdirs = []
+    try:
+        while folders_to_scan:
+            folder = folders_to_scan.pop()
+            scanned_count += 1
+            if verbose:
+                print(f"\r   🔎 {folder[:70]:<70} (Ctrl+C to stop)", end="", flush=True)
+            try:
+                # Paginate through all files in folder
+                offset = 0
+                limit = 5000
+                subdirs = []
 
-            while True:
-                result = fs.get_file_list(
-                    folder_path=folder,
-                    additional=['size', 'time'],
-                    limit=limit,
-                    offset=offset
-                )
+                while True:
+                    result = fs.get_file_list(
+                        folder_path=folder,
+                        additional=['size', 'time'],
+                        limit=limit,
+                        offset=offset
+                    )
 
-                if not result or 'data' not in result:
-                    break
+                    if not result or 'data' not in result:
+                        break
 
-                items = result['data'].get('files', [])
-                if not items:
-                    break
+                    items = result['data'].get('files', [])
+                    if not items:
+                        break
 
-                for item in items:
-                    if item.get('isdir'):
-                        subdirs.append(item['path'])
-                    else:
-                        name = item['name'].lower()
-                        size = item.get('additional', {}).get('size', 0)
-                        mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
-                        # Check if this file matches target mtime better than existing
-                        if target_files and name in target_files:
-                            target_mtime = target_files[name]
-                            is_match = abs(mtime - target_mtime) <= time_tolerance
-                            # Store if: not found yet, OR this one matches and previous didn't
-                            if name not in files:
-                                files[name] = (size, mtime, folder)
-                                if is_match and remaining:
+                    for item in items:
+                        if item.get('isdir'):
+                            subdirs.append(item['path'])
+                        else:
+                            name = item['name'].lower()
+                            size = item.get('additional', {}).get('size', 0)
+                            mtime = item.get('additional', {}).get('time', {}).get('mtime', 0)
+                            # Check if this file matches target mtime better than existing
+                            if target_files and name in target_files:
+                                target_mtime = target_files[name]
+                                is_match = abs(mtime - target_mtime) <= time_tolerance
+                                # Store if: not found yet, OR this one matches and previous didn't
+                                if name not in files:
+                                    files[name] = (size, mtime, folder)
+                                    if is_match and remaining:
+                                        remaining.discard(name)
+                                elif is_match and remaining and name in remaining:
+                                    # Found a matching version, update
+                                    files[name] = (size, mtime, folder)
                                     remaining.discard(name)
-                            elif is_match and remaining and name in remaining:
-                                # Found a matching version, update
+                            elif name not in files:
                                 files[name] = (size, mtime, folder)
-                                remaining.discard(name)
-                        elif name not in files:
-                            files[name] = (size, mtime, folder)
 
-                # Check if we got fewer items than limit (last page)
-                if len(items) < limit:
-                    break
-                offset += limit
+                    # Check if we got fewer items than limit (last page)
+                    if len(items) < limit:
+                        break
+                    offset += limit
 
-            # Early exit if all target files found
-            if remaining is not None and len(remaining) == 0:
-                if verbose:
-                    print(f"\r   🎉 All files found! Scanned {scanned_count} folders{' ' * 30}")
-                return files
+                # Early exit if all target files found
+                if remaining is not None and len(remaining) == 0:
+                    if verbose:
+                        print(f"\r   🎉 All files found! Scanned {scanned_count} folders{' ' * 30}")
+                    return files, False
 
-            # Add subdirs sorted ascending (pop takes from end, so latest scanned first)
-            folders_to_scan.extend(sorted(subdirs))
-        except Exception as e:
-            print(f"\nWarning: Could not scan {folder}: {e}")
+                # Add subdirs sorted ascending (pop takes from end, so latest scanned first)
+                folders_to_scan.extend(sorted(subdirs))
+            except Exception as e:
+                if isinstance(e, KeyboardInterrupt):
+                    raise
+                print(f"\nWarning: Could not scan {folder}: {e}")
+    except KeyboardInterrupt:
+        if verbose:
+            print(f"\r   ⏹ Stopped early. Scanned {scanned_count} folders{' ' * 40}")
+        return files, True
 
     if verbose:
         print(f"\r   ✔ Scanned {scanned_count} folders{' ' * 60}")
-    return files
+    return files, False
 
 
 def format_size(size: int) -> str:
@@ -254,6 +279,7 @@ def main():
     parser.add_argument('--volume', '-v', help='SD card path (alternative to positional)')
     parser.add_argument('--show-skipped', action='store_true', help='List skipped non-media files')
     parser.add_argument('--output', '-o', help='Write report to file')
+    parser.add_argument('--open-missing', action='store_true', help='Open Finder with missing files for a selected date')
 
     args = parser.parse_args()
 
@@ -324,12 +350,16 @@ def main():
     # Build dict of filename -> mtime for matching
     sd_file_mtimes = {name: data[2] for name, data in sd_files.items()}
     nas_files = {}
+    scan_interrupted = False
     for nas_path in nas_paths:
         log(f"📂 Scanning {nas_path} (recursive)...")
         # Only look for files not yet matched
         remaining_mtimes = {k: v for k, v in sd_file_mtimes.items() if k not in nas_files or abs(nas_files[k][1] - v) > 10}
-        folder_files = scan_nas_folder(fs, nas_path, target_files=remaining_mtimes)
+        folder_files, interrupted = scan_nas_folder(fs, nas_path, target_files=remaining_mtimes)
         nas_files.update(folder_files)
+        if interrupted:
+            scan_interrupted = True
+            break
         # Check if all found with matching mtime
         all_matched = all(
             name in nas_files and abs(nas_files[name][1] - mtime) <= 10
@@ -337,6 +367,8 @@ def main():
         )
         if all_matched:
             break
+    if scan_interrupted:
+        log(f"   ⚠️  Scan stopped early - results may be incomplete")
     log(f"   Found {len(nas_files)} matching files on NAS")
 
     # Compare
@@ -361,11 +393,30 @@ def main():
             date_key = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
             by_date[date_key].append((name, size, mtime, path))
 
-        for date_key in sorted(by_date.keys(), reverse=True):
+        sorted_dates = sorted(by_date.keys(), reverse=True)
+        for date_key in sorted_dates:
             files = by_date[date_key]
             names = ", ".join(name for name, size, mtime, path in sorted(files, key=lambda x: x[0]))
             log(f"  {date_key} ({len(files)} files): {names}")
             log("")
+
+        # Open Finder with missing files for selected date
+        if args.open_missing:
+            print("\nSelect a date to open in Finder:")
+            for i, date_key in enumerate(sorted_dates, 1):
+                print(f"  {i}. {date_key} ({len(by_date[date_key])} files)")
+
+            try:
+                choice = input(f"\nSelect date [1-{len(sorted_dates)}] or Enter to skip: ").strip()
+                if choice:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(sorted_dates):
+                        selected_date = sorted_dates[idx]
+                        paths = [path for name, size, mtime, path in by_date[selected_date]]
+                        print(f"\n📂 Opening {len(paths)} files from {selected_date} in Finder...")
+                        open_finder_with_files(paths)
+            except (ValueError, KeyboardInterrupt):
+                pass
     else:
         log("\n🎉 All files are backed up!")
 
