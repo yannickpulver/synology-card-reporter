@@ -137,6 +137,26 @@ def scan_sd_card(sd_path: str) -> dict[str, tuple[int, float]]:
     return files
 
 
+def scan_local_folder(local_path: str, verbose: bool = True) -> dict[str, tuple[int, float, str]]:
+    """Scan local folder for media files. Returns {filename: (size, mtime, folder_path)}."""
+    files = {}
+    root = Path(local_path)
+
+    if not root.exists():
+        if verbose:
+            print(f"   Warning: Local path does not exist: {local_path}")
+        return files
+
+    for path in root.rglob('*'):
+        if path.is_file() and is_media_file(path):
+            stat = path.stat()
+            name = path.name.lower()
+            if name not in files:
+                files[name] = (stat.st_size, stat.st_mtime, str(path.parent))
+
+    return files
+
+
 def scan_nas_folder(
     fs: FileStation,
     nas_path: str,
@@ -247,27 +267,162 @@ def format_time(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M')
 
 
+def find_matching_date_folder(dest_path: str, date_str: str) -> Path | None:
+    """Find folder starting with date string (YYYY-MM-DD or YYYY.MM.DD)."""
+    dest = Path(dest_path)
+    if not dest.exists():
+        return None
+    # Try both YYYY-MM-DD and YYYY.MM.DD formats
+    date_dot = date_str.replace('-', '.')
+    for folder in dest.iterdir():
+        if folder.is_dir() and (folder.name.startswith(date_str) or folder.name.startswith(date_dot)):
+            return folder
+    return None
+
+
+def copy_files_to_folder(files: list[Path], dest_folder: Path) -> tuple[int, int]:
+    """Copy files, skip existing. Returns (copied, skipped)."""
+    import shutil
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    skipped = 0
+    for src in files:
+        dest = dest_folder / src.name
+        if dest.exists():
+            skipped += 1
+        else:
+            shutil.copy2(src, dest)
+            copied += 1
+    return copied, skipped
+
+
+LAST_DEST_FILE = Path.home() / '.sd-checker-last-dest'
+
+
+def load_last_dest() -> str | None:
+    """Load last used destination from file."""
+    if LAST_DEST_FILE.exists():
+        return LAST_DEST_FILE.read_text().strip() or None
+    return None
+
+
+def save_last_dest(dest: str) -> None:
+    """Save last used destination to file."""
+    LAST_DEST_FILE.write_text(dest)
+
+
+def prompt_copy_missing(by_date: dict[str, list]) -> None:
+    """Interactive copy flow for missing files grouped by date."""
+    try:
+        choice = input("\nCopy missing files? [y/n]: ").strip().lower()
+        if choice != 'y':
+            return
+
+        # Suggest last used destination
+        suggested = load_last_dest()
+        if suggested:
+            dest_input = input(f"Destination folder [{suggested}]: ").strip()
+            dest_path = dest_input if dest_input else suggested
+        else:
+            dest_path = input("Destination folder: ").strip()
+
+        if not dest_path:
+            print("No destination specified.")
+            return
+        if not Path(dest_path).exists():
+            print(f"Destination does not exist: {dest_path}")
+            return
+
+        save_last_dest(dest_path)
+        remaining_dates = sorted(by_date.keys(), reverse=True)
+        copied_folders: list[Path] = []
+
+        while remaining_dates:
+            # Auto-select if only one date
+            if len(remaining_dates) == 1:
+                selected_date = remaining_dates[0]
+                print(f"\nOne date remaining: {selected_date} ({len(by_date[selected_date])} files)")
+            else:
+                print(f"\nRemaining dates ({len(remaining_dates)}):")
+                for i, date_key in enumerate(remaining_dates, 1):
+                    print(f"  {i}. {date_key} ({len(by_date[date_key])} files)")
+
+                choice = input(f"\nCopy from which date? [1-{len(remaining_dates)}, q=quit]: ").strip()
+                if choice.lower() == 'q':
+                    break
+
+                try:
+                    idx = int(choice) - 1
+                    if not (0 <= idx < len(remaining_dates)):
+                        print(f"Please enter 1-{len(remaining_dates)} or q")
+                        continue
+                except ValueError:
+                    print(f"Please enter 1-{len(remaining_dates)} or q")
+                    continue
+
+                selected_date = remaining_dates[idx]
+
+            files = by_date[selected_date]
+            file_paths = [path for name, size, mtime, path in files]
+
+            # Check for existing folder with matching date
+            existing = find_matching_date_folder(dest_path, selected_date)
+            if existing:
+                use_existing = input(f"Found '{existing.name}'. Copy there? [y/n]: ").strip().lower()
+                if use_existing == 'y':
+                    dest_folder = existing
+                else:
+                    dest_folder = Path(dest_path) / selected_date.replace('-', '.')
+            else:
+                dest_folder = Path(dest_path) / selected_date.replace('-', '.')
+
+            print(f"Copying {len(file_paths)} files to {dest_folder}...")
+            copied, skipped = copy_files_to_folder(file_paths, dest_folder)
+            print(f"Done ({copied} copied, {skipped} skipped)")
+            copied_folders.append(dest_folder)
+
+            remaining_dates.remove(selected_date)
+
+        # Open destination folder in Finder
+        if copied_folders:
+            subprocess.run(['open', str(Path(dest_path))], capture_output=True)
+
+        print("Done.")
+
+    except KeyboardInterrupt:
+        print("\nCancelled")
+
+
 def compare_files(
     sd_files: dict,
     nas_files: dict,
+    local_files: dict | None = None,
     time_tolerance: int = 10
-) -> tuple[list, list]:
-    """Compare SD files against NAS. Returns (backed_up with nas_folder, missing)."""
-    backed_up = []
+) -> tuple[list, list, list]:
+    """Compare SD files against NAS and local. Returns (backed_up_nas, backed_up_local, missing)."""
+    backed_up_nas = []
+    backed_up_local = []
     missing = []
+    local_files = local_files or {}
 
     for key, (name, size, mtime, path) in sd_files.items():
+        found = False
+        # Check NAS first
         if key in nas_files:
             nas_size, nas_mtime, nas_folder = nas_files[key]
-            # Match if mtime within tolerance
             if abs(mtime - nas_mtime) <= time_tolerance:
-                backed_up.append((name, size, mtime, path, nas_folder))
-            else:
-                missing.append((name, size, mtime, path))
-        else:
+                backed_up_nas.append((name, size, mtime, path, nas_folder))
+                found = True
+        # Check local if not found on NAS
+        if not found and key in local_files:
+            local_size, local_mtime, local_folder = local_files[key]
+            if abs(mtime - local_mtime) <= time_tolerance:
+                backed_up_local.append((name, size, mtime, path, local_folder))
+                found = True
+        if not found:
             missing.append((name, size, mtime, path))
 
-    return backed_up, missing
+    return backed_up_nas, backed_up_local, missing
 
 
 def main():
@@ -277,6 +432,7 @@ def main():
     parser.add_argument('nas_paths', nargs='*', help='NAS folder(s) to search (defaults to SYNOLOGY_FOLDERS env)')
     parser.add_argument('sd_path', nargs='?', help='SD card path (optional, uses picker)')
     parser.add_argument('--volume', '-v', help='SD card path (alternative to positional)')
+    parser.add_argument('--local', '-l', nargs='*', help='Local folder(s) to check (defaults to LOCAL_FOLDERS env)')
     parser.add_argument('--show-skipped', action='store_true', help='List skipped non-media files')
     parser.add_argument('--output', '-o', help='Write report to file')
     parser.add_argument('--open-missing', action='store_true', help='Open Finder with missing files for a selected date')
@@ -303,6 +459,12 @@ def main():
     if not nas_paths:
         print("❌ Error: No NAS folders specified. Use args or set SYNOLOGY_FOLDERS in .env")
         sys.exit(1)
+
+    # Get local folders from args or env
+    local_paths = args.local if args.local is not None else []
+    if not local_paths:
+        default_local = os.getenv('LOCAL_FOLDERS', '')
+        local_paths = default_local.split() if default_local else []
 
     # Determine SD card path
     sd_path = args.volume or args.sd_path
@@ -371,18 +533,37 @@ def main():
         log(f"   ⚠️  Scan stopped early - results may be incomplete")
     log(f"   Found {len(nas_files)} matching files on NAS")
 
+    # Scan local folders
+    local_files = {}
+    if local_paths:
+        log(f"\n💻 Scanning local folders...")
+        for local_path in local_paths:
+            log(f"   📂 {local_path}")
+            folder_files = scan_local_folder(local_path, verbose=False)
+            local_files.update(folder_files)
+        log(f"   Found {len(local_files)} media files locally")
+
     # Compare
     log("\n🔍 Comparing...")
-    backed_up, missing = compare_files(sd_files, nas_files)
+    backed_up_nas, backed_up_local, missing = compare_files(sd_files, nas_files, local_files)
 
-    log(f"\n✅ {len(backed_up)} files backed up")
+    total_backed = len(backed_up_nas) + len(backed_up_local)
+    log(f"\n✅ {total_backed} files backed up")
 
-    # Show matching folders
-    if backed_up:
-        matching_folders = sorted(set(item[4] for item in backed_up))
-        log(f"\n📁 Matching folders on NAS ({len(matching_folders)}):")
+    # Show matching folders on NAS
+    if backed_up_nas:
+        matching_folders = sorted(set(item[4] for item in backed_up_nas))
+        log(f"\n📁 On NAS ({len(backed_up_nas)} files in {len(matching_folders)} folders):")
         for folder in matching_folders:
-            count = sum(1 for item in backed_up if item[4] == folder)
+            count = sum(1 for item in backed_up_nas if item[4] == folder)
+            log(f"   {folder} ({count} files)")
+
+    # Show matching folders locally
+    if backed_up_local:
+        matching_folders = sorted(set(item[4] for item in backed_up_local))
+        log(f"\n💻 On local ({len(backed_up_local)} files in {len(matching_folders)} folders):")
+        for folder in matching_folders:
+            count = sum(1 for item in backed_up_local if item[4] == folder)
             log(f"   {folder} ({count} files)")
 
     if missing:
@@ -417,6 +598,9 @@ def main():
                         open_finder_with_files(paths)
             except (ValueError, KeyboardInterrupt):
                 pass
+
+        # Prompt to copy missing files
+        prompt_copy_missing(by_date)
     else:
         log("\n🎉 All files are backed up!")
 
